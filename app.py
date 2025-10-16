@@ -15,7 +15,7 @@ st.set_page_config(
 )
 
 # ⚠️ IMPORTANTE: CAMBIA ESTA URL POR TU WEBHOOK DE N8N
-N8N_WEBHOOK_URL = "https://eriks12345.app.n8n.cloud/webhook/examenes-calificar"
+N8N_WEBHOOK_URL = "https://n8n-xxxx.n8n.cloud/webhook/examenes-calificar"
 
 # CSS para móvil
 st.markdown("""
@@ -92,9 +92,7 @@ st.header("Paso 2️⃣ - Claves de Respuesta")
 st.info("📝 Formato: Separar preguntas con comas\n\n"
         "**Ejemplo múltiple**: `1:a, 2:d, 3:e, 4:b`\n\n"
         "**Ejemplo binario**: `1:v, 2:f, 3:v`\n\n"
-        "**Mixto**: `1:a, 2:d, 3:e, 4:v, 5:f`\n\n"
-        "**⚠️ La nota se calcula sobre base 20**\n"
-        "**Aprobado: ≥ 11 | Desaprobado: < 11**")
+        "**Mixto**: `1:a, 2:d, 3:e, 4:v, 5:f`")
 
 claves_input = st.text_area(
     "Ingresa las claves de respuesta",
@@ -205,31 +203,8 @@ if st.button("🚀 Procesar Exámenes", use_container_width=True, type="primary"
             
             if response.status_code == 200:
                 data = response.json()
-                
-                # Si los datos están vacíos, usar datos de prueba
-                if not data.get('resultados') or len(data.get('resultados', [])) == 0:
-                    st.session_state.resultados = [
-                        {
-                            "nombre": "examen_prueba.pdf",
-                            "correctas": 5,
-                            "incorrectas": 0,
-                            "nota": 20,
-                            "aprobado": True
-                        }
-                    ]
-                    st.session_state.estadisticas = {
-                        "total_estudiantes": 1,
-                        "promedio_general": 20.0,
-                        "promedio_aprobados": 20.0,
-                        "cantidad_aprobados": 1,
-                        "cantidad_desaprobados": 0,
-                        "nota_maxima": 20,
-                        "nota_minima": 20,
-                        "fecha_procesamiento": datetime.now().isoformat()
-                    }
-                else:
-                    st.session_state.resultados = data.get('resultados', [])
-                    st.session_state.estadisticas = data.get('estadisticas', {})
+                st.session_state.resultados = data.get('resultados', [])
+                st.session_state.estadisticas = data.get('estadisticas', {})
                 
                 progress_bar.progress(100)
                 status_text.text("✅ ¡Procesamiento completado!")
@@ -293,9 +268,9 @@ if st.session_state.resultados and st.session_state.estadisticas:
     with col1:
         st.subheader("📈 Estadísticas")
         stats_info = f"""
-        **Promedio General (s/20)**: {stats.get('promedio_general', 0):.2f}
+        **Promedio General**: {stats.get('promedio_general', 0):.2f}
         
-        **Promedio Aprobados (s/20)**: {stats.get('promedio_aprobados', 0):.2f}
+        **Promedio Aprobados**: {stats.get('promedio_aprobados', 0):.2f}
         
         **Nota Máxima**: {stats.get('nota_maxima', 0):.2f}
         
@@ -322,103 +297,13 @@ if st.session_state.resultados and st.session_state.estadisticas:
     # Opciones de descarga
     st.subheader("📥 Opciones de Descarga")
     
-    # Generar PDF
-    def generar_pdf_reporte():
-        from io import BytesIO
-        from datetime import datetime
-        
-        buffer = BytesIO()
-        
-        # Crear contenido HTML para convertir a PDF
-        html_content = f"""
-        <html>
-        <head>
-            <meta charset="utf-8">
-            <style>
-                body {{ font-family: Arial, sans-serif; margin: 40px; }}
-                .header {{ text-align: center; border-bottom: 3px solid #1f4788; padding-bottom: 20px; margin-bottom: 30px; }}
-                .header h1 {{ color: #1f4788; margin: 0; }}
-                .header p {{ margin: 5px 0; color: #666; }}
-                table {{ width: 100%; border-collapse: collapse; margin: 20px 0; }}
-                th {{ background-color: #1f4788; color: white; padding: 12px; text-align: left; }}
-                td {{ padding: 10px; border-bottom: 1px solid #ddd; }}
-                tr:nth-child(even) {{ background-color: #f9f9f9; }}
-                .stats {{ background-color: #e7f3ff; padding: 20px; border-radius: 5px; margin: 20px 0; }}
-                .stats h2 {{ color: #1f4788; margin-top: 0; }}
-                .stats p {{ margin: 8px 0; }}
-                .footer {{ text-align: center; margin-top: 40px; color: #999; font-size: 12px; }}
-            </style>
-        </head>
-        <body>
-            <div class="header">
-                <h1>📋 REPORTE DE CALIFICACIONES</h1>
-                <p><strong>Curso:</strong> {nombre_curso}</p>
-                <p><strong>Código:</strong> {codigo_curso}</p>
-                <p><strong>Fecha:</strong> {datetime.now().strftime('%d/%m/%Y %H:%M')}</p>
-            </div>
-            
-            <h2>📊 Calificaciones por Estudiante</h2>
-            <table>
-                <tr>
-                    <th>PDF</th>
-                    <th>Correctas</th>
-                    <th>Incorrectas</th>
-                    <th>Nota (s/20)</th>
-                    <th>Estado</th>
-                </tr>
-        """
-        
-        for _, row in df_display.iterrows():
-            estado_class = "aprobado" if row['Estado'] == "✅ Aprobado" else "desaprobado"
-            html_content += f"""
-                <tr>
-                    <td>{row['PDF']}</td>
-                    <td>{row['Correctas']}</td>
-                    <td>{row['Incorrectas']}</td>
-                    <td><strong>{row['Nota']}</strong></td>
-                    <td>{row['Estado']}</td>
-                </tr>
-            """
-        
-        html_content += f"""
-            </table>
-            
-            <div class="stats">
-                <h2>📈 Estadísticas Generales</h2>
-                <p><strong>Total de Estudiantes:</strong> {stats.get('total_estudiantes', 0)}</p>
-                <p><strong>Promedio General (s/20):</strong> {stats.get('promedio_general', 0):.2f}</p>
-                <p><strong>Promedio Aprobados (s/20):</strong> {stats.get('promedio_aprobados', 0):.2f}</p>
-                <p><strong>Aprobados:</strong> {stats.get('cantidad_aprobados', 0)}</p>
-                <p><strong>Desaprobados:</strong> {stats.get('cantidad_desaprobados', 0)}</p>
-                <p><strong>Tasa de Aprobación:</strong> {(stats.get('cantidad_aprobados', 0) / max(stats.get('total_estudiantes', 1), 1) * 100):.1f}%</p>
-                <p><strong>Nota Máxima:</strong> {stats.get('nota_maxima', 0):.2f}</p>
-                <p><strong>Nota Mínima:</strong> {stats.get('nota_minima', 0):.2f}</p>
-            </div>
-            
-            <div class="footer">
-                <p>Reporte generado automáticamente por el Sistema de Calificación</p>
-                <p>© 2025 - Todos los derechos reservados</p>
-            </div>
-        </body>
-        </html>
-        """
-        
-        # Usar pdfkit o alternativa simple
-        try:
-            import pdfkit
-            pdfkit.from_string(html_content, buffer, options={'quiet': ''})
-            return buffer.getvalue()
-        except:
-            # Si no está disponible, crear un archivo de texto simple
-            return html_content.encode('utf-8')
-    
-    col1, col2, col3 = st.columns(3)
+    col1, col2 = st.columns(2)
     
     with col1:
         # Descargar como CSV
         csv_data = df_display.to_csv(index=False, encoding='utf-8-sig')
         st.download_button(
-            label="📊 CSV",
+            label="📊 Descargar como CSV",
             data=csv_data,
             file_name=f"calificaciones_{codigo_curso}_{datetime.now().strftime('%Y%m%d')}.csv",
             mime="text/csv",
@@ -436,21 +321,10 @@ if st.session_state.resultados and st.session_state.estadisticas:
         }, indent=2, ensure_ascii=False)
         
         st.download_button(
-            label="📄 JSON",
+            label="📄 Descargar como JSON",
             data=json_data,
             file_name=f"reporte_{codigo_curso}_{datetime.now().strftime('%Y%m%d')}.json",
             mime="application/json",
-            use_container_width=True
-        )
-    
-    with col3:
-        # Descargar como HTML (simulando PDF)
-        html_data = generar_pdf_reporte()
-        st.download_button(
-            label="📋 HTML",
-            data=html_data,
-            file_name=f"reporte_{codigo_curso}_{datetime.now().strftime('%Y%m%d')}.html",
-            mime="text/html",
             use_container_width=True
         )
     
@@ -472,4 +346,3 @@ st.markdown("""
     <p>⚠️ Asegúrate de actualizar N8N_WEBHOOK_URL con tu webhook real</p>
 </div>
 """, unsafe_allow_html=True)
-

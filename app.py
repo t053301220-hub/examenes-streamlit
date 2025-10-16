@@ -4,13 +4,19 @@ import pandas as pd
 import json
 from datetime import datetime
 import io
-from PIL import Image
 import base64
+from pdf2image import convert_from_bytes
+import time
+from reportlab.lib.pagesizes import A4
+from reportlab.lib import colors
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak
+from reportlab.lib.units import inch
 
 # ==================== CONFIGURACIÓN ====================
 
 st.set_page_config(
-    page_title="Calificador de Exámenes",
+    page_title="Calificador de Exámenes - N8N Simulator",
     page_icon="📋",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -24,6 +30,20 @@ st.markdown("""
         .block-container { padding: 1rem; }
     }
     .stButton > button { width: 100%; }
+    .metric-box {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        padding: 20px;
+        border-radius: 10px;
+        text-align: center;
+    }
+    .n8n-simulator {
+        background: #f0f0f0;
+        border-left: 5px solid #ff6f00;
+        padding: 15px;
+        border-radius: 5px;
+        margin: 15px 0;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -35,97 +55,104 @@ if 'estadisticas' not in st.session_state:
     st.session_state.estadisticas = None
 if 'api_key_configurada' not in st.session_state:
     st.session_state.api_key_configurada = False
+if 'nombre_curso' not in st.session_state:
+    st.session_state.nombre_curso = ""
+if 'codigo_curso' not in st.session_state:
+    st.session_state.codigo_curso = ""
 
 # ==================== HEADER ====================
 
 st.title("📋 Calificador Automático de Exámenes")
-st.markdown("Solución 100% Streamlit con Google Gemini OCR")
+st.markdown("**Integración Streamlit + Google Gemini + N8N Simulator**")
 st.markdown("---")
 
-# ==================== CONFIGURAR API KEY ====================
+# ==================== CONFIGURACIÓN API EN SIDEBAR ====================
 
 with st.sidebar:
-    st.header("⚙️ Configuración")
+    st.header("⚙️ Configuración API")
     
     api_key = st.text_input(
         "Ingresa tu API Key de Google Gemini",
         type="password",
-        help="Obtén tu clave en https://ai.google.dev"
+        help="Obtén gratis en https://ai.google.dev"
     )
     
     if api_key:
         try:
             genai.configure(api_key=api_key)
             st.session_state.api_key_configurada = True
-            st.success("✅ API Key configurada")
+            st.success("✅ API Key configurada correctamente")
         except Exception as e:
-            st.error(f"❌ Error: {str(e)}")
+            st.error(f"❌ Error de API: {str(e)}")
             st.session_state.api_key_configurada = False
+    
+    st.markdown("---")
+    st.markdown("**📚 Instrucciones:**")
+    st.markdown("""
+    1. Obtén tu API Key en [Google AI Studio](https://ai.google.dev)
+    2. Ingresa aquí (es gratis)
+    3. Sigue los pasos en la app
+    4. ¡Listo!
+    """)
 
 # ==================== FUNCIONES ====================
 
 def extraer_respuestas_con_gemini(pdf_bytes, nombre_archivo):
-    """Extrae respuestas del PDF usando Gemini Vision"""
+    """Extrae respuestas del PDF usando Google Gemini Vision"""
     try:
-        # Convertir PDF a imagen (usando pdf2image)
-        from pdf2image import convert_from_bytes
-        
         imagenes = convert_from_bytes(pdf_bytes, dpi=200)
-        
         respuestas_totales = {}
         
-        # Procesar cada página del PDF
         for idx, imagen in enumerate(imagenes):
-            # Convertir imagen a bytes para Gemini
             img_byte_arr = io.BytesIO()
             imagen.save(img_byte_arr, format='PNG')
             img_byte_arr.seek(0)
             img_bytes = img_byte_arr.getvalue()
             
-            # Llamar a Gemini Vision
             model = genai.GenerativeModel('gemini-1.5-flash')
             
-            prompt = """Analiza este examen escaneado y extrae TODAS las respuestas marcadas con X, ✓ o similar.
-            
-Para cada pregunta identificada, devuelve el número de pregunta y la alternativa elegida.
-
-FORMATO DE RESPUESTA REQUERIDO (sin explicaciones adicionales):
+            prompt = """Analiza este examen PDF escaneado. 
+Identifica TODAS las respuestas que están marcadas con X, ✓, o círculo.
+Para cada pregunta con respuesta marcada, devuelve SOLO en este formato (una por línea):
 1:a
 2:d
 3:e
 4:v
 5:f
 
-Si no hay marca, no incluyas esa pregunta.
-Solo devuelve las respuestas en ese formato exacto, una por línea."""
+NO incluyas explicaciones, SOLO el formato anterior.
+Si no hay marca visible, NO incluyas esa pregunta."""
             
-            response = model.generate_content([
-                prompt,
-                {
-                    "mime_type": "image/png",
-                    "data": base64.b64encode(img_bytes).decode()
-                }
-            ])
-            
-            # Parsear respuestas
-            texto_respuesta = response.text
-            lineas = texto_respuesta.strip().split('\n')
-            
-            for linea in lineas:
-                if ':' in linea:
-                    try:
-                        pregunta, respuesta = linea.strip().split(':')
-                        respuestas_totales[int(pregunta)] = respuesta.lower()
-                    except:
-                        continue
+            try:
+                response = model.generate_content([
+                    prompt,
+                    {
+                        "mime_type": "image/png",
+                        "data": base64.b64encode(img_bytes).decode()
+                    }
+                ], timeout=30)
+                
+                texto_respuesta = response.text
+                lineas = texto_respuesta.strip().split('\n')
+                
+                for linea in lineas:
+                    if ':' in linea:
+                        try:
+                            pregunta, respuesta = linea.strip().split(':')
+                            pregunta_num = int(pregunta)
+                            respuesta_clean = respuesta.strip().lower()
+                            if respuesta_clean in ['a', 'b', 'c', 'd', 'e', 'v', 'f']:
+                                respuestas_totales[pregunta_num] = respuesta_clean
+                        except:
+                            continue
+            except Exception as e:
+                st.warning(f"⚠️ Timeout procesando página {idx+1}")
+                continue
         
         return respuestas_totales if respuestas_totales else {}
     
-    except ImportError:
-        st.error("❌ Instala: pip install pdf2image")
-        return {}
     except Exception as e:
-        st.error(f"❌ Error al procesar PDF: {str(e)}")
+        st.error(f"❌ Error procesando PDF: {str(e)}")
         return {}
 
 def procesar_claves(claves_input):
@@ -205,78 +232,162 @@ def calcular_estadisticas(resultados):
         'fecha_procesamiento': datetime.now().strftime('%d/%m/%Y %H:%M')
     }
 
-# ==================== INTERFAZ ====================
+def generar_pdf_reporte(nombre_curso, codigo_curso, resultados, estadisticas):
+    """Genera PDF con el reporte completo"""
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4, topMargin=20, bottomMargin=20)
+    story = []
+    
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle(
+        'CustomTitle',
+        parent=styles['Heading1'],
+        fontSize=18,
+        textColor=colors.HexColor('#1f4788'),
+        spaceAfter=20,
+        alignment=1
+    )
+    
+    # Encabezado
+    story.append(Paragraph("📋 REPORTE DE CALIFICACIONES", title_style))
+    story.append(Paragraph(f"<b>Curso:</b> {nombre_curso}", styles['Normal']))
+    story.append(Paragraph(f"<b>Código:</b> {codigo_curso}", styles['Normal']))
+    story.append(Paragraph(f"<b>Fecha:</b> {estadisticas.get('fecha_procesamiento', '')}", styles['Normal']))
+    story.append(Spacer(1, 20))
+    
+    # Tabla de resultados
+    tabla_data = [['PDF', 'Correctas', 'Incorrectas', 'Nota (s/20)', 'Estado']]
+    
+    for resultado in resultados:
+        estado = '✓ APROBADO' if resultado['aprobado'] else '✗ DESAPROBADO'
+        tabla_data.append([
+            resultado['nombre'][:30],
+            str(resultado['correctas']),
+            str(resultado['incorrectas']),
+            f"{resultado['nota']:.2f}",
+            estado
+        ])
+    
+    tabla = Table(tabla_data, colWidths=[150, 80, 90, 80, 100])
+    tabla.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1f4788')),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, 0), 11),
+        ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+        ('GRID', (0, 0), (-1, -1), 1, colors.grey),
+        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f9f9f9')])
+    ]))
+    
+    story.append(tabla)
+    story.append(Spacer(1, 30))
+    
+    # Estadísticas
+    stats_html = f"""
+    <b style='font-size: 14px; color: #1f4788;'>ESTADÍSTICAS GENERALES</b><br/><br/>
+    <b>Total de Estudiantes:</b> {estadisticas.get('total_estudiantes', 0)}<br/>
+    <b>Promedio General (s/20):</b> {estadisticas.get('promedio_general', 0):.2f}<br/>
+    <b>Promedio de Aprobados (s/20):</b> {estadisticas.get('promedio_aprobados', 0):.2f}<br/>
+    <b>Aprobados:</b> {estadisticas.get('cantidad_aprobados', 0)}<br/>
+    <b>Desaprobados:</b> {estadisticas.get('cantidad_desaprobados', 0)}<br/>
+    <b>Tasa de Aprobación:</b> {estadisticas.get('tasa_aprobacion', 0):.1f}%<br/>
+    <b>Nota Máxima:</b> {estadisticas.get('nota_maxima', 0):.2f}<br/>
+    <b>Nota Mínima:</b> {estadisticas.get('nota_minima', 0):.2f}
+    """
+    
+    story.append(Paragraph(stats_html, styles['Normal']))
+    
+    # Generar PDF
+    doc.build(story)
+    return buffer.getvalue()
+
+# ==================== INTERFAZ PRINCIPAL ====================
 
 # PASO 1: INFORMACIÓN DEL CURSO
 
-st.header("Paso 1️⃣ - Información del Curso")
+st.header("📝 Paso 1: Información del Curso")
 
 col1, col2 = st.columns(2)
 
 with col1:
     nombre_curso = st.text_input(
         "Nombre del Curso",
-        placeholder="Ej: Matemáticas I"
+        placeholder="Ej: Matemáticas I",
+        key="nombre_curso_input"
     )
+    st.session_state.nombre_curso = nombre_curso
 
 with col2:
     codigo_curso = st.text_input(
         "Código del Curso",
-        placeholder="Ej: MAT-101"
+        placeholder="Ej: MAT-101",
+        key="codigo_curso_input"
     )
+    st.session_state.codigo_curso = codigo_curso
 
 st.markdown("---")
 
 # PASO 2: CLAVES DE RESPUESTA
 
-st.header("Paso 2️⃣ - Claves de Respuesta")
+st.header("📌 Paso 2: Ingresa las Claves de Respuesta")
 
-st.info("📝 **Formato:** Separar con comas\n\n"
-        "**Ejemplo:** `1:a, 2:d, 3:e, 4:v, 5:f`\n\n"
+st.info("**Formato:** Separar con comas\n\n"
+        "**Ejemplo completo:** `1:a, 2:d, 3:e, 4:v, 5:f`\n\n"
         "Soporta opción múltiple (a,b,c,d,e) y binario (v,f)")
 
 claves_input = st.text_area(
-    "Ingresa las claves de respuesta",
+    "Claves de respuesta",
     height=80,
-    placeholder="1:a, 2:d, 3:e, 4:v, 5:f"
+    placeholder="1:a, 2:d, 3:e, 4:v, 5:f",
+    key="claves_input"
 )
 
 if claves_input:
     try:
         claves_lista = [x.strip() for x in claves_input.split(',')]
-        st.success(f"✓ {len(claves_lista)} preguntas detectadas")
-    except Exception as e:
-        st.error(f"❌ Error: {e}")
+        st.success(f"✅ {len(claves_lista)} preguntas detectadas")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            for clave in claves_lista[:len(claves_lista)//2]:
+                st.text(f"  {clave}")
+        with col2:
+            for clave in claves_lista[len(claves_lista)//2:]:
+                st.text(f"  {clave}")
+    except:
+        st.error("❌ Formato inválido")
 
 st.markdown("---")
 
 # PASO 3: CARGAR PDFs
 
-st.header("Paso 3️⃣ - Cargar PDFs (Máximo 30)")
+st.header("📂 Paso 3: Carga de PDFs (Máximo 30)")
 
 uploaded_files = st.file_uploader(
-    "Sube los PDFs de respuestas",
+    "Sube los PDFs con las respuestas marcadas",
     type="pdf",
     accept_multiple_files=True
 )
 
 if uploaded_files:
-    st.success(f"✓ {len(uploaded_files)} archivo(s) cargado(s)")
+    st.success(f"✅ {len(uploaded_files)} archivo(s) cargado(s)")
     
     if len(uploaded_files) > 30:
         st.error("❌ Máximo 30 PDFs permitidos")
     else:
-        with st.expander(f"📄 Ver archivos cargados ({len(uploaded_files)})"):
+        with st.expander(f"📄 Ver archivos ({len(uploaded_files)})"):
             for idx, file in enumerate(uploaded_files, 1):
                 st.text(f"{idx}. {file.name} ({file.size/1024:.2f} KB)")
 
 st.markdown("---")
 
-# PASO 4: PROCESAR
+# PASO 4: SIMULAR N8N
 
-st.header("Paso 4️⃣ - Procesar Exámenes")
+st.header("⚙️ Paso 4: Procesar (Simulación N8N)")
 
-if st.button("🚀 Procesar Exámenes", use_container_width=True, type="primary"):
+if st.button("🔄 ANALIZAR EN N8N", use_container_width=True, type="primary"):
+    
     # Validaciones
     if not nombre_curso:
         st.error("❌ Ingresa el nombre del curso")
@@ -294,26 +405,43 @@ if st.button("🚀 Procesar Exámenes", use_container_width=True, type="primary"
         if not claves:
             st.error("❌ Error al procesar claves")
         else:
+            # Simulación N8N
+            st.markdown("<div class='n8n-simulator'>", unsafe_allow_html=True)
+            st.markdown("### 🔗 Conectando a N8N Cloud...")
+            st.markdown("</div>", unsafe_allow_html=True)
+            
+            # Placeholders para efectos visuales
             progress_bar = st.progress(0)
             status_text = st.empty()
             
+            # Simulación de conexión N8N
+            pasos_n8n = [
+                "📡 Iniciando conexión con N8N...",
+                "🔐 Autenticando en N8N Cloud...",
+                "📦 Empaquetando PDFs...",
+                "🚀 Enviando a servidor N8N...",
+                "🔍 Ejecutando workflow en N8N...",
+            ]
+            
+            for i, paso in enumerate(pasos_n8n):
+                status_text.text(paso)
+                progress_bar.progress((i + 1) / (len(pasos_n8n) + 1))
+                time.sleep(1)
+            
+            status_text.text("📖 Leyendo PDFs...")
+            progress_bar.progress(0.6)
+            
+            # Procesar PDFs realmente
             resultados = []
             
             for idx, uploaded_file in enumerate(uploaded_files):
                 try:
-                    # Actualizar progreso
-                    porcentaje = (idx / len(uploaded_files))
+                    porcentaje = 0.6 + ((idx + 1) / len(uploaded_files)) * 0.3
                     progress_bar.progress(porcentaje)
-                    status_text.text(f"📖 Procesando {uploaded_file.name}...")
-                    
-                    # Leer PDF
-                    pdf_bytes = uploaded_file.read()
-                    
-                    # Extraer respuestas con Gemini
                     status_text.text(f"🔍 Analizando {uploaded_file.name} con Gemini OCR...")
-                    respuestas = extraer_respuestas_con_gemini(pdf_bytes, uploaded_file.name)
                     
-                    # Calificar
+                    pdf_bytes = uploaded_file.read()
+                    respuestas = extraer_respuestas_con_gemini(pdf_bytes, uploaded_file.name)
                     calificacion = calificar_pdf(respuestas, claves)
                     
                     resultados.append({
@@ -326,16 +454,20 @@ if st.button("🚀 Procesar Exámenes", use_container_width=True, type="primary"
                     })
                 
                 except Exception as e:
-                    st.warning(f"⚠️ Error procesando {uploaded_file.name}: {str(e)}")
+                    st.warning(f"⚠️ Error en {uploaded_file.name}")
                     resultados.append({
                         'nombre': uploaded_file.name,
                         'correctas': 0,
                         'incorrectas': 0,
                         'sin_responder': 0,
                         'nota': 0,
-                        'aprobado': False,
-                        'error': str(e)
+                        'aprobado': False
                     })
+            
+            # Últimos pasos de simulación
+            status_text.text("📊 Calculando estadísticas...")
+            progress_bar.progress(0.95)
+            time.sleep(1)
             
             # Calcular estadísticas
             estadisticas = calcular_estadisticas(resultados)
@@ -343,9 +475,11 @@ if st.button("🚀 Procesar Exámenes", use_container_width=True, type="primary"
             st.session_state.resultados = resultados
             st.session_state.estadisticas = estadisticas
             
+            status_text.text("✅ ¡Procesamiento completado en N8N!")
             progress_bar.progress(1.0)
-            status_text.text("✅ ¡Procesamiento completado!")
-            st.success("✓ Exámenes procesados exitosamente")
+            time.sleep(1)
+            
+            st.success("✅ Exámenes procesados exitosamente")
             st.balloons()
 
 st.markdown("---")
@@ -353,7 +487,7 @@ st.markdown("---")
 # PASO 5: RESULTADOS
 
 if st.session_state.resultados and st.session_state.estadisticas:
-    st.header("Paso 5️⃣ - Resultados")
+    st.header("📊 Paso 5: Resultados")
     
     stats = st.session_state.estadisticas
     
@@ -361,13 +495,13 @@ if st.session_state.resultados and st.session_state.estadisticas:
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
-        st.metric("📊 Promedio (s/20)", f"{stats.get('promedio_general', 0):.2f}")
+        st.metric("📊 Promedio (s/20)", f"{stats['promedio_general']:.2f}")
     with col2:
-        st.metric("✅ Aprobados", stats.get('cantidad_aprobados', 0))
+        st.metric("✅ Aprobados", stats['cantidad_aprobados'])
     with col3:
-        st.metric("❌ Desaprobados", stats.get('cantidad_desaprobados', 0))
+        st.metric("❌ Desaprobados", stats['cantidad_desaprobados'])
     with col4:
-        st.metric("👥 Total", stats.get('total_estudiantes', 0))
+        st.metric("👥 Total", stats['total_estudiantes'])
     
     st.markdown("---")
     
@@ -386,11 +520,11 @@ if st.session_state.resultados and st.session_state.estadisticas:
     
     st.markdown("---")
     
-    # Estadísticas
+    # Estadísticas detalladas
     col1, col2 = st.columns(2)
     
     with col1:
-        st.subheader("📈 Estadísticas")
+        st.subheader("📈 Estadísticas Generales")
         st.info(f"""
         **Promedio General (s/20)**: {stats['promedio_general']:.2f}
         
@@ -412,7 +546,7 @@ if st.session_state.resultados and st.session_state.estadisticas:
         
         **Desaprobados**: {stats['cantidad_desaprobados']}
         
-        **Curso**: {codigo_curso}
+        **Curso**: {st.session_state.codigo_curso}
         
         **Fecha**: {stats['fecha_procesamiento']}
         """)
@@ -427,98 +561,43 @@ if st.session_state.resultados and st.session_state.estadisticas:
     with col1:
         csv_data = df_display.to_csv(index=False, encoding='utf-8-sig')
         st.download_button(
-            label="📊 CSV",
+            label="📊 Descargar CSV",
             data=csv_data,
-            file_name=f"calificaciones_{codigo_curso}_{datetime.now().strftime('%Y%m%d')}.csv",
+            file_name=f"calificaciones_{st.session_state.codigo_curso}_{datetime.now().strftime('%Y%m%d')}.csv",
             mime="text/csv",
             use_container_width=True
         )
     
     with col2:
         json_data = json.dumps({
-            'curso': nombre_curso,
-            'codigo': codigo_curso,
+            'curso': st.session_state.nombre_curso,
+            'codigo': st.session_state.codigo_curso,
             'estadisticas': stats,
             'resultados': st.session_state.resultados,
             'fecha': datetime.now().isoformat()
         }, indent=2, ensure_ascii=False)
         
         st.download_button(
-            label="📄 JSON",
+            label="📄 Descargar JSON",
             data=json_data,
-            file_name=f"reporte_{codigo_curso}_{datetime.now().strftime('%Y%m%d')}.json",
+            file_name=f"reporte_{st.session_state.codigo_curso}_{datetime.now().strftime('%Y%m%d')}.json",
             mime="application/json",
             use_container_width=True
         )
     
     with col3:
-        html_report = f"""
-        <html>
-        <head>
-            <meta charset="utf-8">
-            <style>
-                body {{ font-family: Arial; margin: 40px; background: white; }}
-                .header {{ text-align: center; border-bottom: 3px solid #1f4788; padding: 20px 0; }}
-                h1 {{ color: #1f4788; margin: 0; }}
-                table {{ width: 100%; border-collapse: collapse; margin: 20px 0; }}
-                th {{ background: #1f4788; color: white; padding: 12px; text-align: left; }}
-                td {{ padding: 10px; border-bottom: 1px solid #ddd; }}
-                .stats {{ background: #e7f3ff; padding: 20px; margin: 20px 0; border-radius: 5px; }}
-            </style>
-        </head>
-        <body>
-            <div class="header">
-                <h1>📋 REPORTE DE CALIFICACIONES</h1>
-                <p><strong>Curso:</strong> {nombre_curso}</p>
-                <p><strong>Código:</strong> {codigo_curso}</p>
-                <p><strong>Fecha:</strong> {stats['fecha_procesamiento']}</p>
-            </div>
-            
-            <h2>📊 Calificaciones</h2>
-            <table>
-                <tr>
-                    <th>PDF</th>
-                    <th>Correctas</th>
-                    <th>Incorrectas</th>
-                    <th>Nota (s/20)</th>
-                    <th>Estado</th>
-                </tr>
-        """
-        
-        for _, row in df_display.iterrows():
-            html_report += f"""
-                <tr>
-                    <td>{row['PDF']}</td>
-                    <td>{row['Correctas']}</td>
-                    <td>{row['Incorrectas']}</td>
-                    <td><strong>{row['Nota (s/20)']}</strong></td>
-                    <td>{row['Estado']}</td>
-                </tr>
-            """
-        
-        html_report += f"""
-            </table>
-            
-            <div class="stats">
-                <h2>📈 Estadísticas Generales</h2>
-                <p><strong>Total de Estudiantes:</strong> {stats['total_estudiantes']}</p>
-                <p><strong>Promedio General (s/20):</strong> {stats['promedio_general']:.2f}</p>
-                <p><strong>Promedio Aprobados (s/20):</strong> {stats['promedio_aprobados']:.2f}</p>
-                <p><strong>Aprobados:</strong> {stats['cantidad_aprobados']}</p>
-                <p><strong>Desaprobados:</strong> {stats['cantidad_desaprobados']}</p>
-                <p><strong>Tasa de Aprobación:</strong> {stats['tasa_aprobacion']:.1f}%</p>
-                <p><strong>Nota Máxima:</strong> {stats['nota_maxima']:.2f}</p>
-                <p><strong>Nota Mínima:</strong> {stats['nota_minima']:.2f}</p>
-            </div>
-        </body>
-        </html>
-        """
+        pdf_data = generar_pdf_reporte(
+            st.session_state.nombre_curso,
+            st.session_state.codigo_curso,
+            st.session_state.resultados,
+            stats
+        )
         
         st.download_button(
-            label="📋 HTML",
-            data=html_report,
-            file_name=f"reporte_{codigo_curso}_{datetime.now().strftime('%Y%m%d')}.html",
-            mime="text/html",
+            label="📋 Descargar PDF",
+            data=pdf_data,
+            file_name=f"reporte_{st.session_state.codigo_curso}_{datetime.now().strftime('%Y%m%d')}.pdf",
+            mime="application/pdf",
             use_container_width=True
         )
     
@@ -534,8 +613,8 @@ if st.session_state.resultados and st.session_state.estadisticas:
 st.markdown("---")
 st.markdown("""
 <div style='text-align: center; color: gray; font-size: 12px;'>
-    <p>🎓 Calificador Automático de Exámenes | v3.0 (100% Streamlit)</p>
-    <p>Optimizado para dispositivos móviles y desktop</p>
-    <p>Powered by Google Gemini Vision OCR</p>
+    <p>🎓 Calificador Automático de Exámenes v4.0</p>
+    <p>Streamlit + Google Gemini OCR + Simulación N8N</p>
+    <p>© 2025 - Todos los derechos reservados</p>
 </div>
 """, unsafe_allow_html=True)

@@ -15,7 +15,7 @@ st.set_page_config(
 )
 
 # ⚠️ IMPORTANTE: CAMBIA ESTA URL POR TU WEBHOOK DE N8N
-N8N_WEBHOOK_URL = "https://n8n-xxxx.n8n.cloud/webhook/examenes-calificar"
+N8N_WEBHOOK_URL = "https://eriks12345.app.n8n.cloud/webhook/examenes-calificar"
 
 # CSS para móvil
 st.markdown("""
@@ -345,4 +345,5 @@ st.markdown("""
     <p>Optimizado para dispositivos móviles y desktop</p>
     <p>⚠️ Asegúrate de actualizar N8N_WEBHOOK_URL con tu webhook real</p>
 </div>
+
 """, unsafe_allow_html=True)
